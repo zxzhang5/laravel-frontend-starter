@@ -18,15 +18,21 @@ class UserTableSeeder extends Seeder
             [                
                 'name' => '管理员',
                 'mobile' => '13412345678',
-                'email' => 'test@qq.com',
-                'password' => 'test'
+                'email' => 'admin@qq.com',
+                'password' => '1234'
+            ],
+            [                
+                'name' => '普通用户',
+                'mobile' => '13412345679',
+                'email' => 'user@qq.com',
+                'password' => '1234'
             ]
         ];
 
         foreach ($users as $i => $user) {
             Sentinel::register($user, true);
             $u = User::where('name', '=', $user['name'])->first();
-            $u->roles()->sync([1, 2]);
+            $u->roles()->sync([$u->id]);
         }
     }
 
