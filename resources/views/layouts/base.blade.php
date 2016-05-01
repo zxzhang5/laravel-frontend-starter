@@ -15,6 +15,7 @@
             <meta name="description" content="">
         @show
         @yield("css")
+        
         <link href="/lib/font-awesome/css/font-awesome.min.css" rel="stylesheet">
         <link href="/css/website.css" rel="stylesheet">
         @yield("style")

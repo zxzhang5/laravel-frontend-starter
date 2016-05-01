@@ -38,10 +38,10 @@ Route::group(['middleware' => ['web']], function () {
 $api = app('Dingo\Api\Routing\Router');
 $api->version('v1', function ($api) {
     $api->group(['namespace' => 'App\Http\Controllers\Api'], function ($api) {
-       $api->get('{object_name}', ['uses' => 'JsonController@getList']);
-       $api->get('{object_name}/{id}', ['uses' => 'JsonController@getDetail']);
-       $api->post('{object_name}', ['uses' => 'JsonController@store']);       
-       $api->put('{object_name}/{id}', ['uses' => 'JsonController@update']);
-       $api->delete('{object_name}/{id}', ['uses' => 'JsonController@destroy']);       
+       $api->get('{object_name}', ['uses' => 'JsonApiController@getList']);
+       $api->get('{object_name}/{id}', ['uses' => 'JsonApiController@getDetail']);
+       $api->post('{object_name}', ['uses' => 'JsonApiController@store']);       
+       $api->put('{object_name}/{id}', ['uses' => 'JsonApiController@update']);
+       $api->delete('{object_name}/{id}', ['uses' => 'JsonApiController@destroy']);       
     });
 });
