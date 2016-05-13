@@ -4,7 +4,9 @@ namespace Dingo\Blueprint;
 
 use ReflectionClass;
 use RuntimeException;
+use Illuminate\Support\Str;
 use Illuminate\Support\Collection;
+use Illuminate\Filesystem\Filesystem;
 use Doctrine\Common\Annotations\AnnotationRegistry;
 use Doctrine\Common\Annotations\SimpleAnnotationReader;
 
@@ -18,15 +20,31 @@ class Blueprint
     protected $reader;
 
     /**
+     * Filesytsem instance.
+     *
+     * @var \Illuminate\Filesystem\Filesystem
+     */
+    protected $files;
+
+    /**
+     * Include path for documentation files.
+     *
+     * @var string
+     */
+    protected $includePath;
+
+    /**
      * Create a new generator instance.
      *
      * @param \Doctrine\Common\Annotations\SimpleAnnotationReader $reader
+     * @param \Illuminate\Filesystem\Filesystem                   $files
      *
      * @return void
      */
-    public function __construct(SimpleAnnotationReader $reader)
+    public function __construct(SimpleAnnotationReader $reader, Filesystem $files)
     {
         $this->reader = $reader;
+        $this->files = $files;
 
         $this->registerAnnotationLoader();
     }
@@ -55,13 +73,17 @@ class Blueprint
     /**
      * Generate documentation with the name and version.
      *
-     * @param string $name
-     * @param string $version
+     * @param \Illuminate\Support\Collection $controllers
+     * @param string                         $name
+     * @param string                         $version
+     * @param string                         $includePath
      *
      * @return bool
      */
-    public function generate(Collection $controllers, $name, $version)
+    public function generate(Collection $controllers, $name, $version, $includePath)
     {
+        $this->includePath = $includePath;
+
         $resources = $controllers->map(function ($controller) use ($version) {
             $controller = $controller instanceof ReflectionClass ? $controller : new ReflectionClass($controller);
 
@@ -89,7 +111,11 @@ class Blueprint
             return new Resource($controller->getName(), $controller, $annotations, $actions);
         });
 
-        return $this->generateContentsFromResources($resources, $name);
+        $contents = $this->generateContentsFromResources($resources, $name);
+
+        $this->includePath = null;
+
+        return $contents;
     }
 
     /**
@@ -121,7 +147,7 @@ class Blueprint
                 $this->appendParameters($contents, $parameters);
             }
 
-            $resource->getActions()->each(function ($action) use (&$contents) {
+            $resource->getActions()->each(function ($action) use (&$contents, $resource) {
                 $contents .= $this->line(2);
                 $contents .= $action->getDefinition();
 
@@ -139,19 +165,19 @@ class Blueprint
                 }
 
                 if ($request = $action->getRequest()) {
-                    $this->appendRequest($contents, $request);
+                    $this->appendRequest($contents, $request, $resource);
                 }
 
                 if ($response = $action->getResponse()) {
-                    $this->appendResponse($contents, $response);
+                    $this->appendResponse($contents, $response, $resource);
                 }
 
                 if ($transaction = $action->getTransaction()) {
                     foreach ($transaction->value as $value) {
                         if ($value instanceof Annotation\Request) {
-                            $this->appendRequest($contents, $value);
+                            $this->appendRequest($contents, $value, $resource);
                         } elseif ($value instanceof Annotation\Response) {
-                            $this->appendResponse($contents, $value);
+                            $this->appendResponse($contents, $value, $resource);
                         } else {
                             throw new RuntimeException('Unsupported annotation type given in transaction.');
                         }
@@ -212,8 +238,9 @@ class Blueprint
             $contents .= $this->line();
             $contents .= $this->tab();
             $contents .= sprintf(
-                '+ %s (%s, %s) - %s',
+                '+ %s:%s (%s, %s) - %s',
                 $parameter->identifier,
+                $parameter->example ? " `{$parameter->example}`" : '',
                 $parameter->members ? sprintf('enum[%s]', $parameter->type) : $parameter->type,
                 $parameter->required ? 'required' : 'optional',
                 $parameter->description
@@ -237,10 +264,11 @@ class Blueprint
      *
      * @param string                               $contents
      * @param \Dingo\Blueprint\Annotation\Response $response
+     * @param \Dingo\Blueprint\Resource            $resource
      *
      * @return void
      */
-    protected function appendResponse(&$contents, Annotation\Response $response)
+    protected function appendResponse(&$contents, Annotation\Response $response, Resource $resource)
     {
         $this->appendSection($contents, sprintf('Response %s', $response->statusCode));
 
@@ -248,8 +276,8 @@ class Blueprint
             $contents .= ' ('.$response->contentType.')';
         }
 
-        if (! empty($request->headers)) {
-            $this->appendHeaders($contents, $request->headers);
+        if (! empty($response->headers) || $resource->hasResponseHeaders()) {
+            $this->appendHeaders($contents, array_merge($resource->getResponseHeaders(), $response->headers));
         }
 
         if (isset($response->attributes)) {
@@ -266,10 +294,11 @@ class Blueprint
      *
      * @param string                              $contents
      * @param \Dingo\Blueprint\Annotation\Request $request
+     * @param \Dingo\Blueprint\Resource           $resource
      *
      * @return void
      */
-    protected function appendRequest(&$contents, $request)
+    protected function appendRequest(&$contents, $request, Resource $resource)
     {
         $this->appendSection($contents, 'Request');
 
@@ -279,8 +308,8 @@ class Blueprint
 
         $contents .= ' ('.$request->contentType.')';
 
-        if (! empty($request->headers)) {
-            $this->appendHeaders($contents, $request->headers);
+        if (! empty($request->headers) || $resource->hasRequestHeaders()) {
+            $this->appendHeaders($contents, array_merge($resource->getRequestHeaders(), $request->headers));
         }
 
         if (isset($request->attributes)) {
@@ -323,7 +352,7 @@ class Blueprint
      * Append a headers subsection to an action.
      *
      * @param string $contents
-     * @param array  $response
+     * @param array  $headers
      *
      * @return void
      */
@@ -365,8 +394,24 @@ class Blueprint
      */
     protected function prepareBody($body, $contentType)
     {
+        if (is_string($body) && Str::startsWith($body, ['json', 'file'])) {
+            list($type, $path) = explode(':', $body);
+
+            if (! Str::endsWith($path, '.json') && $type == 'json') {
+                $path .= '.json';
+            }
+
+            $body = $this->files->get($includePath.'/'.$path);
+
+            json_decode($body);
+
+            if (json_last_error() == JSON_ERROR_NONE) {
+                return $body;
+            }
+        }
+
         if (strpos($contentType, 'application/json') === 0) {
-            return json_encode($body, JSON_PRETTY_PRINT);
+            return json_encode($body, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         }
 
         return $body;
